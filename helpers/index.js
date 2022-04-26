@@ -18,9 +18,8 @@ const chunkStr = (str, n, acc) => {
 
 const LRCgenerator = (data) => {
     const chunk = chunkStr(data, 2, [])
-    const LRC = 
-    [...chunk].map(a => a.charCodeAt(1)).reduce((a, b) => a ^ b);
-    return (LRC ^ "0x03").toString(16)
+    const LRC = [...chunk].map(a => a.charCodeAt(1)).reduce((a, b) => a ^ b);
+    return ('00' + ((LRC ^ "0x03").toString(16))).slice(-2)
 }
 
 const hexToBuffer = (data) => {

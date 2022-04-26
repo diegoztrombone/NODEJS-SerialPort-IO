@@ -2,10 +2,12 @@ const { SerialPort } = require('serialport')
 const { InterByteTimeoutParser } = require('@serialport/parser-inter-byte-timeout')
 const printer = require('printer');
 
-const {chartToHex, hexToBuffer, LRCgenerator} = require('./helpers')
+const prompt = require('prompt-sync')();
+
+const { chartToHex, hexToBuffer, LRCgenerator } = require('./helpers')
 
 
-const port = new SerialPort({ path: 'COM9', baudRate: 19200 })
+const port = new SerialPort({ path: 'COM11', baudRate: 19200 })
 const parser = port.pipe(new InterByteTimeoutParser({ interval: 20 }))
 
 const STX = '02'
@@ -14,16 +16,20 @@ const ETX = '03'
 const EOT = Buffer.from('04', 'hex')
 const ENQ = Buffer.from('05', 'hex')
 const ACK = Buffer.from('06', 'hex')
+const NACK = Buffer.from('15', 'hex')
 const SEPARATOR = '90'
 const quantity = process.argv[2]
 
 
-const TPV_ACK = Buffer.from('023938363390900307', 'hex')
+const TPV_RESPONSE_OK = Buffer.from('023938363390900307', 'hex')
+const SALE_CONFIRMATION = Buffer.from('02393837339090300336', 'hex')
 
-const SALE_ACK = Buffer.from('02393837339090300336', 'hex')
 
 let interval = -1
+let timeout3 = -1
 let isSellComplete = false
+
+const T3 = 60000 * 5
 
 const write = (msg) => {
   port.write(msg, function (err) {
@@ -35,11 +41,12 @@ const write = (msg) => {
 }
 
 const sendPrint = (info) => {
+  console.log(">>>>>>>>>>>> ENTRA IMPRESORA")
   printer.printDirect({
     data: info,
     type: 'RAW',
     success: (jobID) => {
-      console.log("ID: ", jobID);
+        
     },
     error: (err) => {
       console.log('printer module error: ', err);
@@ -48,71 +55,94 @@ const sendPrint = (info) => {
 }
 
 parser.on('data', (data) => {
-  console.log("RX", data)
-  console.log("RX LENGTH", data.length)
+  console.log(">>>>>>>>>>>>>>>>>>> RX", data)
   
+
   const checkACK = Buffer.compare(data, ACK)
-  const checkTPV_ACK = Buffer.compare(data, TPV_ACK)
+  const checkTPV_RESPONSE_OK = Buffer.compare(data, TPV_RESPONSE_OK)
   const checkEOT = Buffer.compare(data, EOT)
+  const checkNACK = Buffer.compare(data, NACK)
 
   if (checkACK === 0 && !isSellComplete) {
-    console.log(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-
+    console.log(">>>> RECIBIDO ACK, ENVIANDO ENQ")
     interval = setInterval(() => {
       write(ENQ)
     }, 500)
 
+    timeout = setTimeout(() => {
+      console.log(">>>>>>>>>>>>ENVIA EOT FIN")
+      write(EOT)
+      clearInterval(interval)
+    }, T3)
+
     return
   }
 
-  if(checkTPV_ACK === 0) {
-    console.log("ENTRA IF CHECK TPV_ACK")
+  if (checkTPV_RESPONSE_OK === 0) {
+    console.log(">>> ENTRA IF CHECK TPV_RESPONSE_OK")
     write(EOT)
+    return
   }
 
-  if(data.length > 100) {
-    isSellComplete = true
-    console.log("ENTRA IFK")
-    /* const buff = Buffer.from(data).subarray(0,450)
-    const buff2 = Buffer.from(data).subarray(0,450)
-    const buffMargin = Buffer.from([])
-    const doc = Buffer.concat([buff, buffMargin])
-    console.log(buff.toString())
-    console.log(doc.toString()) */
-    //sendPrint(data)
-    write(EOT)
-    write(SALE_ACK)
-  }
 
-  if(checkEOT === 0 && isSellComplete) {
+  if(checkNACK === 0) {
+    console.log(">>>>>>>>>>>ERRROR")
+    write(EOT)
+    return
+  }
+  if (checkEOT === 0 && isSellComplete) {
     console.log(">>>>> FIN DEL PROCESO")
     clearInterval(interval)
+    process.exit(1)
+
   }
+
+ 
+
+
+  isSellComplete = true
+  console.log(">>>>>>>>>> ENTRA TICKET")
+  const buff = Buffer.from(data)
+  console.log(buff.toString('utf-8'))
+  sendPrint(data)
+  write(EOT)
+  //write(SALE_CONFIRMATION)
+  write(hexToBuffer(saleConfirmationGenerator("31")))
+
+
 })
 
-const saleGenerator = () => {
-  const separatorArr = Array.from({length: 11}, (e) => SEPARATOR).join("")
+const saleRequestGenerator = () => {
+  const separatorArr = Array.from({ length: 11 }, (e) => SEPARATOR).join("")
   const transformedQuantity = chartToHex(quantity)
-  console.log("TRANSFOR QUANTITY", transformedQuantity)
   const saleDataWithoutLRC = "31" + "30" + "30" + "31" + SEPARATOR + transformedQuantity + separatorArr
   console.log("LRC", LRCgenerator(saleDataWithoutLRC))
-  return STX + saleDataWithoutLRC + ETX + ('00' + LRCgenerator(saleDataWithoutLRC)).slice(-2)
+  return STX + saleDataWithoutLRC + ETX + LRCgenerator(saleDataWithoutLRC)
+}
+
+const saleConfirmationGenerator = (code) => {
+  const saleConfirmationCode = "383733"
+  const saleConfirmationWithoutLRC = "39" + saleConfirmationCode + SEPARATOR + SEPARATOR + code  
+  return STX + saleConfirmationWithoutLRC + ETX + LRCgenerator(saleConfirmationWithoutLRC)
+ 
 }
 
 
 
 const init = () => {
-  if(!quantity) {
+  if (!quantity) {
     console.log("DATOS INCORRECTOS")
     return process.exit(1)
   }
-  console.log("sale", saleGenerator())
-  write(hexToBuffer(saleGenerator()))
+
+  write(hexToBuffer(saleRequestGenerator()))
 }
 
 
 
 init()
+
+
 
 
 
